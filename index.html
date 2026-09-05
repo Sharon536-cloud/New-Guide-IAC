@@ -152,6 +152,27 @@
   }
   .status.short { background: var(--warn-soft); color: var(--warn); }
   .status.over { background: var(--bad-soft); color: var(--bad); }
+  .statusrow { display: flex; gap: 8px; align-items: center; }
+  .statusrow .status { flex: 1; }
+  .suggest { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .suggest[hidden] { display: none; }
+  .sg-title { font-weight: 700; font-size: 15px; }
+  .sg-label { font-size: 12px; color: var(--muted); letter-spacing: .04em; margin-top: 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 10px;
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { font-weight: 500; font-size: 14px; }
+  .chip small { color: var(--muted); font-size: 12px; }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
   .top.short .bar > div { background: var(--warn); }
   .top.over .bar > div { background: var(--bad); }
 
@@ -368,7 +389,11 @@
       <span class="of">מתוך <span id="targetLbl">40</span> שעות</span>
     </div>
     <div class="bar" aria-hidden="true"><div id="fill"></div></div>
-    <div class="status" id="status" role="status"></div>
+    <div class="statusrow">
+      <div class="status" id="status" role="status"></div>
+      <button class="navbtn" id="undo" hidden>ביטול</button>
+    </div>
+    <div class="suggest" id="suggest" hidden></div>
   </header>
 
   <main style="display:flex;flex-direction:column;gap:16px">
@@ -418,6 +443,12 @@
   ];
 
   const clone = (o) => JSON.parse(JSON.stringify(o));
+  const hh = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+  function human(min) {
+    const map = { 15: 'רבע שעה', 30: 'חצי שעה', 45: '45 דקות', 60: 'שעה', 90: 'שעה וחצי', 120: 'שעתיים', 150: 'שעתיים וחצי', 180: 'שלוש שעות' };
+    return map[min] || fmt(min) + ' שעות';
+  }
+  let undoSnap = null;
 
   let store = { target: 40, template: clone(DEFAULT_TEMPLATE), weeks: {} };
   try {
@@ -518,7 +549,82 @@
     else st.textContent = `השבוע סגור על ${store.target} שעות בדיוק`;
     const wd = days.filter((d) => d.on).length;
     st.textContent += ` · ${wd} ימי עבודה`;
+    $('undo').hidden = !undoSnap;
+    renderSuggest(days, diff);
   }
+
+  // ---- suggestions: how to make up (or trim) the difference ----
+  function buildSuggestions(days, diff) {
+    const list = [];
+    const M = Math.abs(diff);
+    const cands = days.map((d, i) => ({ d, i })).filter(({ d }) => d.on && d.segs.length && segDur(d.segs[d.segs.length - 1]) > 0);
+    const lastOf = (d) => d.segs[d.segs.length - 1];
+    const endOf = (d) => toMin(lastOf(d).to);
+    const shiftEnd = (d, delta) => { const s = lastOf(d); s.to = hh(toMin(s.to) + delta); };
+    const shiftStart = (d, delta) => { const s = d.segs[0]; s.from = hh(toMin(s.from) + delta); };
+
+    if (diff > 0) {
+      cands.forEach(({ d, i }) => {
+        const e = endOf(d) + M;
+        if (e <= 21 * 60) list.push({ group: 'one', text: `${DL[i]} · יציאה ${hh(e)}`, sub: `במקום ${lastOf(d).to}`, apply: (dd) => shiftEnd(dd[i], M) });
+        const st = toMin(d.segs[0].from) - M;
+        if (st >= 7 * 60 + 30) list.push({ group: 'one', text: `${DL[i]} · כניסה ${hh(st)}`, sub: `במקום ${d.segs[0].from}`, apply: (dd) => shiftStart(dd[i], -M) });
+      });
+      const singles = cands.filter(({ d }) => d.segs.length === 1);
+      if (M % 30 === 0) {
+        const half = M / 2;
+        for (let a = 0; a < singles.length; a++) for (let b = a + 1; b < singles.length; b++) {
+          const A = singles[a], B = singles[b];
+          list.push({ group: 'split', text: `${DL[A.i]} + ${DL[B.i]} · ${human(half)} לכל יום`,
+            sub: `יציאה ${hh(endOf(A.d) + half)} ו-${hh(endOf(B.d) + half)}`,
+            apply: (dd) => { shiftEnd(dd[A.i], half); shiftEnd(dd[B.i], half); } });
+        }
+      }
+      [[singles, 'כל הימים הרגילים'], [cands, 'כל ימי העבודה']].forEach(([g, name]) => {
+        const k = g.length;
+        if (k > 2 && M % (k * 15) === 0) {
+          const each = M / k;
+          list.push({ group: 'split', text: `${name} · ${human(each)} לכל יום`,
+            sub: g.map(({ d, i }) => `${DL[i]} ${hh(endOf(d) + each)}`).join(' · '),
+            apply: (dd) => g.forEach(({ i }) => shiftEnd(dd[i], each)) });
+        }
+      });
+    } else if (diff < 0) {
+      cands.forEach(({ d, i }) => {
+        const last = lastOf(d);
+        const e = toMin(last.to) - M;
+        if (e > toMin(last.from)) list.push({ group: 'one', text: `${DL[i]} · יציאה ${hh(e)}`, sub: `במקום ${last.to}`, apply: (dd) => shiftEnd(dd[i], -M) });
+      });
+    }
+    return list;
+  }
+
+  function renderSuggest(days, diff) {
+    const el = $('suggest');
+    const list = diff === 0 ? [] : buildSuggestions(days, diff);
+    el._list = list;
+    if (!list.length) { el.hidden = true; el.innerHTML = ''; return; }
+    const chip = (s) => `<button class="chip" data-sug="${list.indexOf(s)}"><b>${s.text}</b><small>${s.sub}</small></button>`;
+    const one = list.filter((s) => s.group === 'one'), split = list.filter((s) => s.group === 'split');
+    let html = `<div class="sg-title">${diff > 0 ? `איך להשלים ${human(diff)}? בחרי:` : `איפה לקצר ${human(-diff)}? בחרי:`}</div>`;
+    if (one.length) html += `<div class="sg-label">ביום אחד</div><div class="chips">${one.map(chip).join('')}</div>`;
+    if (split.length) html += `<div class="sg-label">בחלוקה בין ימים</div><div class="chips">${split.map(chip).join('')}</div>`;
+    el.innerHTML = html;
+    el.hidden = false;
+  }
+  $('suggest').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sug]');
+    if (!b) return;
+    const days = weekDays();
+    undoSnap = clone(days);
+    $('suggest')._list[+b.dataset.sug].apply(days);
+    save(); renderWeek();
+  });
+  $('undo').addEventListener('click', () => {
+    if (!undoSnap) return;
+    store.weeks[keyOf(cur)] = undoSnap; undoSnap = null;
+    save(); renderWeek();
+  });
 
   function renderWeek() { renderList(daysEl, weekDays(), 'week'); updateHeader(); }
   function renderTpl() { renderList(tplEl, store.template, 'tpl'); }
@@ -543,7 +649,6 @@
         const d = days[+b.dataset.i];
         const last = toMin(d.segs[0].to) ?? 810;
         const from = last + MIN_GAP, to = from + 150;
-        const hh = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
         d.segs.push({ from: hh(Math.min(from, 22 * 60)), to: hh(Math.min(to, 23 * 60 + 45)) });
       } else if (b.dataset.act === 'rm') {
         const segEl = b.closest('.seg');
@@ -555,8 +660,8 @@
   bind(daysEl, weekDays, updateHeader);
   bind(tplEl, () => store.template, () => {});
 
-  $('prev').addEventListener('click', () => { cur = addDays(cur, -7); renderWeek(); });
-  $('next').addEventListener('click', () => { cur = addDays(cur, 7); renderWeek(); });
+  $('prev').addEventListener('click', () => { cur = addDays(cur, -7); undoSnap = null; renderWeek(); });
+  $('next').addEventListener('click', () => { cur = addDays(cur, 7); undoSnap = null; renderWeek(); });
   $('weekTitle').addEventListener('click', () => { cur = sundayOf(new Date()); renderWeek(); });
 
   $('resetContract').addEventListener('click', () => { store.weeks[keyOf(cur)] = clone(store.template); save(); renderWeek(); });
