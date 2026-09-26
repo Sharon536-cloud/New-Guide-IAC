@@ -451,21 +451,14 @@
   }
   let undoSnap = null;
 
-  let store = { target: 40, template: clone(DEFAULT_TEMPLATE), weeks: {} };
+  let store = { v: 2, target: 40, template: clone(DEFAULT_TEMPLATE), weeks: {} };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) { const s = JSON.parse(raw); if (s && s.weeks) store = Object.assign(store, s); }
   } catch (e) { /* storage unavailable: work in memory */ }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
-  // migrate split days saved with the earlier defaults (13:30 / 16:00–18:30)
-  (function migrate() {
-    const fix = (days) => days.forEach((d) => {
-      if (d.segs.length === 2 && d.segs[0].from === '08:00' && d.segs[0].to === '13:30' && d.segs[1].from === '16:00' && d.segs[1].to === '18:30') {
-        d.segs[0].to = '13:00'; d.segs[1].from = '15:30'; d.segs[1].to = '18:00';
-      }
-    });
-    fix(store.template); Object.values(store.weeks).forEach(fix); save();
-  })();
+  // schema v2: split days changed to 08:00-13:00 / 15:30-18:00. Older saved data is reset.
+  if (store.v !== 2) { store = { v: 2, target: store.target || 40, template: clone(DEFAULT_TEMPLATE), weeks: {} }; save(); }
 
   // ---- dates ----
   function sundayOf(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - x.getDay()); return x; }
