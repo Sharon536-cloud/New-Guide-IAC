@@ -454,7 +454,7 @@
   let store = { v: 2, target: 40, template: clone(DEFAULT_TEMPLATE), weeks: {} };
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) { const s = JSON.parse(raw); if (s && s.weeks) store = Object.assign(store, s); }
+    if (raw) { const s = JSON.parse(raw); if (s && s.weeks) store = Object.assign({}, s); }
   } catch (e) { /* storage unavailable: work in memory */ }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
   // schema v2: split days changed to 08:00-13:00 / 15:30-18:00. Older saved data is reset.
