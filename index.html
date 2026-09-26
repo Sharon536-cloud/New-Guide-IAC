@@ -431,13 +431,14 @@
   const DN = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי'];
   const MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
   const MIN_GAP = 150; // 2:30 between split shifts
+  const MAX_END = 18 * 60; // never suggest leaving after 18:00
   const KEY = 'planner40.v1';
 
   const DEFAULT_TEMPLATE = [
     { on: true, segs: [{ from: '08:30', to: '16:00' }] },
-    { on: true, segs: [{ from: '08:00', to: '13:30' }, { from: '16:00', to: '18:30' }] },
+    { on: true, segs: [{ from: '08:00', to: '13:00' }, { from: '15:30', to: '18:00' }] },
     { on: true, segs: [{ from: '08:30', to: '16:00' }] },
-    { on: true, segs: [{ from: '08:00', to: '13:30' }, { from: '16:00', to: '18:30' }] },
+    { on: true, segs: [{ from: '08:00', to: '13:00' }, { from: '15:30', to: '18:00' }] },
     { on: true, segs: [{ from: '08:30', to: '15:30' }] },
     { on: true, segs: [{ from: '09:30', to: '11:30' }] },
   ];
@@ -456,6 +457,15 @@
     if (raw) { const s = JSON.parse(raw); if (s && s.weeks) store = Object.assign(store, s); }
   } catch (e) { /* storage unavailable: work in memory */ }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+  // migrate split days saved with the earlier defaults (13:30 / 16:00–18:30)
+  (function migrate() {
+    const fix = (days) => days.forEach((d) => {
+      if (d.segs.length === 2 && d.segs[0].from === '08:00' && d.segs[0].to === '13:30' && d.segs[1].from === '16:00' && d.segs[1].to === '18:30') {
+        d.segs[0].to = '13:00'; d.segs[1].from = '15:30'; d.segs[1].to = '18:00';
+      }
+    });
+    fix(store.template); Object.values(store.weeks).forEach(fix); save();
+  })();
 
   // ---- dates ----
   function sundayOf(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - x.getDay()); return x; }
@@ -566,7 +576,7 @@
     if (diff > 0) {
       cands.forEach(({ d, i }) => {
         const e = endOf(d) + M;
-        if (e <= 21 * 60) list.push({ group: 'one', text: `${DL[i]} · יציאה ${hh(e)}`, sub: `במקום ${lastOf(d).to}`, apply: (dd) => shiftEnd(dd[i], M) });
+        if (e <= MAX_END) list.push({ group: 'one', text: `${DL[i]} · יציאה ${hh(e)}`, sub: `במקום ${lastOf(d).to}`, apply: (dd) => shiftEnd(dd[i], M) });
         const st = toMin(d.segs[0].from) - M;
         if (st >= 7 * 60 + 30) list.push({ group: 'one', text: `${DL[i]} · כניסה ${hh(st)}`, sub: `במקום ${d.segs[0].from}`, apply: (dd) => shiftStart(dd[i], -M) });
       });
@@ -575,6 +585,7 @@
         const half = M / 2;
         for (let a = 0; a < singles.length; a++) for (let b = a + 1; b < singles.length; b++) {
           const A = singles[a], B = singles[b];
+          if (endOf(A.d) + half > MAX_END || endOf(B.d) + half > MAX_END) continue;
           list.push({ group: 'split', text: `${DL[A.i]} + ${DL[B.i]} · ${human(half)} לכל יום`,
             sub: `יציאה ${hh(endOf(A.d) + half)} ו-${hh(endOf(B.d) + half)}`,
             apply: (dd) => { shiftEnd(dd[A.i], half); shiftEnd(dd[B.i], half); } });
@@ -584,6 +595,7 @@
         const k = g.length;
         if (k > 2 && M % (k * 15) === 0) {
           const each = M / k;
+          if (g.some(({ d }) => endOf(d) + each > MAX_END)) return;
           list.push({ group: 'split', text: `${name} · ${human(each)} לכל יום`,
             sub: g.map(({ d, i }) => `${DL[i]} ${hh(endOf(d) + each)}`).join(' · '),
             apply: (dd) => g.forEach(({ i }) => shiftEnd(dd[i], each)) });
